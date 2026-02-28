@@ -165,7 +165,7 @@ public class EaglerServerHandler extends MessageToMessageCodec<WebSocketFrame, B
             }
             if (c2p.hasAttr(EaglercraftHandler.profileDataKey)) {
                 EaglercraftHandler.ProfileData profileData = c2p.attr(EaglercraftHandler.profileDataKey).get();
-                if (profileData.type.equals("skin_v1")) {
+                if (profileData != null && (profileData.type.equals("skin_v1") || profileData.type.equals("skin_v2"))) {
                     int packetType = profileData.data[0] & 0xFF;
                     if (packetType == 1 || packetType == 2) {
                         try {
@@ -178,7 +178,6 @@ public class EaglerServerHandler extends MessageToMessageCodec<WebSocketFrame, B
                             out.add(new BinaryWebSocketFrame(bb));
                         } catch (Exception ignored) {}
                     }
-
                 }
             }
             return;

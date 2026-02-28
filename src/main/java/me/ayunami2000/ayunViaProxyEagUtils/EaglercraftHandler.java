@@ -55,6 +55,7 @@ public class EaglercraftHandler extends MessageToMessageCodec<WebSocketFrame, By
     private HostAndPort host;
     public State state;
     public ProtocolVersion version;
+    public int eaglercraftVersion = 1;
     public int pluginMessageId;
     public String username;
 
@@ -168,12 +169,16 @@ public class EaglercraftHandler extends MessageToMessageCodec<WebSocketFrame, By
                         for (int i = 0; i < count; ++i) {
                             eaglercraftVersions.add(data.readUnsignedShort());
                         }
-                        if (!eaglercraftVersions.contains(2) && !eaglercraftVersions.contains(3)) {
+                        if (!eaglercraftVersions.contains(2) && !eaglercraftVersions.contains(3) && !eaglercraftVersions.contains(4) && !eaglercraftVersions.contains(5)) {
                             Logger.LOGGER.error("No supported eaglercraft versions found");
                             ctx.close();
                             return;
                         }
-                        if (eaglercraftVersions.contains(3)) {
+                        if (eaglercraftVersions.contains(5)) {
+                            eaglercraftVersion = 5;
+                        } else if (eaglercraftVersions.contains(4)) {
+                            eaglercraftVersion = 4;
+                        } else if (eaglercraftVersions.contains(3)) {
                             eaglercraftVersion = 3;
                         }
                         count = data.readUnsignedShort();
@@ -193,9 +198,10 @@ public class EaglercraftHandler extends MessageToMessageCodec<WebSocketFrame, By
                         data.skipBytes(1);
                         data.skipBytes(data.readUnsignedByte());
                     }
-                    if (data.isReadable()) {
+                    if (data.isReadable() && eaglercraftVersion < 4) {
                         throw new IllegalArgumentException("Too much data in packet: " + data.readableBytes() + " bytes");
                     }
+                    this.eaglercraftVersion = eaglercraftVersion;
                     Logger.LOGGER.info("Eaglercraft client connected: " + clientBrand + " " + clientVersionString);
                     this.state = State.HANDSHAKE_COMPLETE;
                     this.version = ProtocolVersion.getProtocol(minecraftVersion);
@@ -216,6 +222,9 @@ public class EaglercraftHandler extends MessageToMessageCodec<WebSocketFrame, By
                     response.writeByte(ViaProxy.VERSION.length()).writeCharSequence(ViaProxy.VERSION, StandardCharsets.US_ASCII);
                     response.writeByte(0);
                     response.writeShort(0);
+                    if (eaglercraftVersion >= 5) {
+                        response.writeBoolean(false);
+                    }
                     ctx.writeAndFlush(new BinaryWebSocketFrame(response));
                     break;
                 }
@@ -227,7 +236,7 @@ public class EaglercraftHandler extends MessageToMessageCodec<WebSocketFrame, By
                     final String username = data.readCharSequence(data.readUnsignedByte(), StandardCharsets.US_ASCII).toString();
                     data.readCharSequence(data.readUnsignedByte(), StandardCharsets.US_ASCII);
                     data.skipBytes(data.readUnsignedByte());
-                    if (data.isReadable()) {
+                    if (data.isReadable() && this.eaglercraftVersion < 4) {
                         throw new IllegalArgumentException("Too much data in packet: " + data.readableBytes() + " bytes");
                     }
                     this.state = State.LOGIN;
@@ -243,13 +252,25 @@ public class EaglercraftHandler extends MessageToMessageCodec<WebSocketFrame, By
                 case LOGIN: {
                     final int packetId = data.readUnsignedByte();
                     if (packetId == 7) {
-                        String type = data.readCharSequence(data.readUnsignedByte(), StandardCharsets.US_ASCII).toString();
-                        final byte[] dataBytes = new byte[data.readUnsignedShort()];
-                        data.readBytes(dataBytes);
-                        if (data.isReadable()) {
-                            throw new IllegalArgumentException("Too much data in packet: " + data.readableBytes() + " bytes");
+                        if (this.eaglercraftVersion >= 4) {
+                            int count = data.readUnsignedByte();
+                            for (int k = 0; k < count; k++) {
+                                String type = data.readCharSequence(data.readUnsignedByte(), StandardCharsets.US_ASCII).toString();
+                                final byte[] dataBytes = new byte[data.readUnsignedShort()];
+                                data.readBytes(dataBytes);
+                                if (type.startsWith("skin_")) {
+                                    ctx.channel().attr(profileDataKey).set(new ProfileData(type, dataBytes));
+                                }
+                            }
+                        } else {
+                            String type = data.readCharSequence(data.readUnsignedByte(), StandardCharsets.US_ASCII).toString();
+                            final byte[] dataBytes = new byte[data.readUnsignedShort()];
+                            data.readBytes(dataBytes);
+                            if (data.isReadable()) {
+                                throw new IllegalArgumentException("Too much data in packet: " + data.readableBytes() + " bytes");
+                            }
+                            ctx.channel().attr(profileDataKey).set(new ProfileData(type, dataBytes));
                         }
-                        ctx.channel().attr(profileDataKey).set(new ProfileData(type, dataBytes));
                     } else {
                         if (packetId != 8) {
                             throw new IllegalStateException("Unexpected packet id " + packetId + " in state " + this.state);
@@ -279,6 +300,9 @@ public class EaglercraftHandler extends MessageToMessageCodec<WebSocketFrame, By
                     break;
                 }
                 case LOGIN_COMPLETE: {
+                    if (this.eaglercraftVersion >= 5 && data.readableBytes() >= 1 && data.getByte(data.readerIndex()) == (byte) 0xEE) {
+                        break;
+                    }
                     if (this.version.equals(LegacyProtocolVersion.r1_5_2)) {
                         final int packetId = data.readUnsignedByte();
                         if (packetId == ServerboundPackets1_5_2.SHARED_KEY.getId()) {

@@ -20,9 +20,7 @@ public class SkinPackets {
                     break;
                 }
                 case 6: {
-                    if (FunnyConfig.premiumSkins) {
-                        processGetOtherSkinByURL(data, sender, skinService);
-                    }
+                    processGetOtherSkinByURL(data, sender, skinService);
                     break;
                 }
                 default: {
@@ -91,13 +89,18 @@ public class SkinPackets {
                 break;
             }
             case 2: {
-                final byte[] pixels = new byte[16384];
-                if (bs.length != 2 + pixels.length) {
+                if (bs.length == 2 + 16384) {
+                    final byte[] pixels = new byte[16384];
+                    setAlphaForChest(pixels, (byte) (-1));
+                    System.arraycopy(bs, 2, pixels, 0, pixels.length);
+                    generatedPacket = makeCustomResponse(clientUUID, bs[1] & 0xFF, pixels);
+                } else if (bs.length == 2 + 12288) {
+                    final byte[] pixels = convertV4ToV3Skin(bs, 2);
+                    setAlphaForChest(pixels, (byte) (-1));
+                    generatedPacket = makeCustomResponse(clientUUID, bs[1] & 0xFF, pixels);
+                } else {
                     throw new IOException("Invalid length " + bs.length + " for custom skin packet");
                 }
-                setAlphaForChest(pixels, (byte) (-1));
-                System.arraycopy(bs, 2, pixels, 0, pixels.length);
-                generatedPacket = makeCustomResponse(clientUUID, bs[1] & 0xFF, pixels);
                 break;
             }
             default: {
@@ -105,6 +108,31 @@ public class SkinPackets {
             }
         }
         skinService.registerEaglercraftPlayer(clientUUID, generatedPacket);
+    }
+
+    public static byte[] convertV3ToV4Skin(final byte[] v3data, final int offset) {
+        final byte[] pixels = new byte[12288];
+        for (int i = 0; i < 4096; i++) {
+            int j = i * 4 + offset;
+            int k = i * 3;
+            pixels[k] = v3data[j + 1];
+            pixels[k + 1] = v3data[j + 2];
+            pixels[k + 2] = (byte) ((v3data[j] != 0 ? 0x80 : 0) | ((v3data[j + 3] & 0xFF) >> 1));
+        }
+        return pixels;
+    }
+
+    public static byte[] convertV4ToV3Skin(final byte[] v4data, final int offset) {
+        final byte[] pixels = new byte[16384];
+        for (int i = 0; i < 4096; i++) {
+            int k = i * 3 + offset;
+            int j = i << 2;
+            pixels[j] = (v4data[k + 2] & 0x80) != 0 ? (byte) 0xFF : 0;
+            pixels[j + 1] = v4data[k];
+            pixels[j + 2] = v4data[k + 1];
+            pixels[j + 3] = (byte) ((v4data[k + 2] & 0x7F) << 1);
+        }
+        return pixels;
     }
 
     public static byte[] asciiString(String string) {

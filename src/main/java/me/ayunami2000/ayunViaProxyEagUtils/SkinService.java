@@ -24,11 +24,56 @@ public class SkinService {
     }
 
     private static void sendData(final ChannelHandlerContext ctx, final byte[] data) {
+        EaglercraftHandler handler = (EaglercraftHandler) ctx.pipeline().get("eaglercraft-handler");
+        int eagVer = handler.eaglercraftVersion;
         final ByteBuf bb = ctx.alloc().buffer();
-        PacketTypes.writeVarInt(bb, MCPackets.S2C_CUSTOM_PAYLOAD.getId((((EaglercraftHandler) ctx.pipeline().get("eaglercraft-handler")).version).getVersion()));
-        PacketTypes.writeString(bb, "EAG|Skins-1.8");
-        bb.writeBytes(data);
+        if (eagVer >= 5) {
+            bb.writeByte(0xEE);
+            writeV5SkinResponse(bb, data, ctx);
+        } else if (eagVer >= 4) {
+            PacketTypes.writeVarInt(bb, MCPackets.S2C_CUSTOM_PAYLOAD.getId(handler.version.getVersion()));
+            PacketTypes.writeString(bb, "EAG|1.8");
+            writeV4SkinResponse(bb, data);
+        } else {
+            PacketTypes.writeVarInt(bb, MCPackets.S2C_CUSTOM_PAYLOAD.getId(handler.version.getVersion()));
+            PacketTypes.writeString(bb, "EAG|Skins-1.8");
+            bb.writeBytes(data);
+        }
         ctx.writeAndFlush(new BinaryWebSocketFrame(bb));
+    }
+
+    private static void writeV4SkinResponse(ByteBuf bb, byte[] v3data) {
+        int type = v3data[0] & 0xFF;
+        if (type == 4) {
+            bb.writeByte(0x02);
+            bb.writeBytes(v3data, 1, v3data.length - 1);
+        } else if (type == 5) {
+            bb.writeByte(0x03);
+            bb.writeBytes(v3data, 1, 17);
+            bb.writeBytes(SkinPackets.convertV3ToV4Skin(v3data, 18));
+        }
+    }
+
+    private static void writeV5SkinResponse(ByteBuf bb, byte[] v3data, ChannelHandlerContext ctx) {
+        UUID responseUUID = SkinPackets.bytesToUUID(v3data, 1);
+        int requestId = 0;
+        java.util.concurrent.ConcurrentHashMap<UUID, Integer> requestIdMap = ctx.channel().attr(EaglerXSkinHandler.v5RequestIdMapKey).get();
+        if (requestIdMap != null) {
+            Integer rid = requestIdMap.remove(responseUUID);
+            if (rid != null) requestId = rid;
+        }
+        int type = v3data[0] & 0xFF;
+        if (type == 4) {
+            bb.writeByte(0x01);
+            PacketTypes.writeVarInt(bb, requestId);
+            int presetId = (v3data[17] & 0xFF) << 24 | (v3data[18] & 0xFF) << 16 | (v3data[19] & 0xFF) << 8 | (v3data[20] & 0xFF);
+            PacketTypes.writeVarInt(bb, presetId);
+        } else if (type == 5) {
+            bb.writeByte(0x02);
+            PacketTypes.writeVarInt(bb, requestId);
+            bb.writeByte(v3data[17]);
+            bb.writeBytes(SkinPackets.convertV3ToV4Skin(v3data, 18));
+        }
     }
 
     public void processGetOtherSkin(final UUID searchUUID, final ChannelHandlerContext sender) {
@@ -80,7 +125,21 @@ public class SkinService {
             }
             sendData(sender, SkinPackets.makeCustomResponse(searchUUID, 0, res));
         } else {
-            processGetOtherSkin(searchUUID, "https://crafatar.com/skins/" + searchUUID.toString(), sender);
+            String skinUrl = null;
+            EaglerUUIDRewriter rewriter = (EaglerUUIDRewriter) sender.pipeline().get("ayun-eag-uuid-rewriter");
+            if (rewriter != null) {
+                skinUrl = rewriter.getSkinUrl(searchUUID);
+                if (skinUrl == null) {
+                    UUID onlineUUID = rewriter.getOnlineUUID(searchUUID);
+                    if (onlineUUID != null) {
+                        skinUrl = "https://crafatar.com/skins/" + onlineUUID.toString();
+                    }
+                }
+            }
+            if (skinUrl == null) {
+                skinUrl = "https://crafatar.com/skins/" + searchUUID.toString();
+            }
+            processGetOtherSkin(searchUUID, skinUrl, sender);
         }
     }
 
@@ -163,7 +222,14 @@ public class SkinService {
                 res = new byte[16385];
                 res[0] = 1;
                 final int o = type == 2 ? 16 : 0;
-                System.arraycopy(packet, 18 - o, res, 1, 16384);
+                final int dataOffset = 18 - o;
+                final int dataLen = packet.length - dataOffset;
+                if (dataLen == 12288) {
+                    byte[] converted = SkinPackets.convertV4ToV3Skin(packet, dataOffset);
+                    System.arraycopy(converted, 0, res, 1, 16384);
+                } else {
+                    System.arraycopy(packet, dataOffset, res, 1, 16384);
+                }
                 for (int i = 1; i < 16385; i += 4) {
                     final byte tmp = res[i];
                     res[i] = res[i + 1];

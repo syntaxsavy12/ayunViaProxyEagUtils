@@ -1,6 +1,5 @@
 package me.ayunami2000.ayunViaProxyEagUtils;
 
-import com.google.gson.JsonObject;
 import com.mojang.authlib.GameProfile;
 import com.viaversion.viaversion.util.ChatColorUtil;
 import io.netty.channel.Channel;
@@ -33,6 +32,8 @@ public class ConnectionHandshake {
     private static final AttributeKey<Integer> serverVersKey = AttributeKey.newInstance("eag-server-vers");
     private static final int protocolV2 = 2;
     private static final int protocolV3 = 3;
+    private static final int protocolV4 = 4;
+    private static final int protocolV5 = 5;
 
     public static void attemptHandshake(List<Object> out, Channel ch, ProxyConnection proxyConnection, String password) {
         try {
@@ -43,9 +44,11 @@ public class ConnectionHandshake {
 
             d.writeByte(2); // legacy protocol version
 
-            d.writeShort(2); // supported eagler protocols count
+            d.writeShort(4); // supported eagler protocols count
             d.writeShort(protocolV2); // client supports v2
             d.writeShort(protocolV3); // client supports v3
+            d.writeShort(protocolV4); // client supports v4
+            d.writeShort(protocolV5); // client supports v5
 
             d.writeShort(1); // supported game protocols count
             d.writeShort(proxyConnection.getServerVersion().getVersion()); // client supports this protocol
@@ -114,7 +117,7 @@ public class ConnectionHandshake {
             } else if (type == HandshakePacketTypes.PROTOCOL_SERVER_VERSION) {
                 int serverVers = di.readShort();
 
-                if (serverVers != protocolV2 && serverVers != protocolV3) {
+                if (serverVers < protocolV2 || serverVers > protocolV5) {
                     Logger.LOGGER.info("Incompatible server version: {}", serverVers);
                     proxyConnection.kickClient(serverVers < protocolV2 ? "Outdated Server" : "Outdated Client");
                     return;
@@ -149,6 +152,9 @@ public class ConnectionHandshake {
 
                 byte[] salt = new byte[saltLength];
                 di.read(salt);
+                if (serverVers >= protocolV5) {
+                    di.readBoolean();
+                }
 
                 bao.reset();
                 d.writeByte(HandshakePacketTypes.PROTOCOL_CLIENT_REQUEST_LOGIN);
@@ -238,6 +244,14 @@ public class ConnectionHandshake {
                 } else {
                     d.writeByte(0);
                 }
+                if (serverVers >= protocolV4) {
+                    d.writeBoolean(false);
+                    d.writeByte(0);
+                }
+                if (serverVers >= protocolV5) {
+                    d.writeByte(0);
+                    d.writeByte(0);
+                }
 
                 ch.writeAndFlush(new BinaryWebSocketFrame(ch.alloc().buffer(bao.size()).writeBytes(bao.toByteArray())));
             } else if (type == HandshakePacketTypes.PROTOCOL_SERVER_ERROR) {
@@ -268,21 +282,31 @@ public class ConnectionHandshake {
 
                 String serverUsername = asciiString(dat);
 
-                JsonObject json = new JsonObject();
-                json.addProperty("name", serverUsername);
-                UUID uuid = new UUID(di.readLong(), di.readLong());
-                json.addProperty("uuid", uuid.toString());
+                di.readLong();
+                di.readLong();
+                UUID uuid = UUID.nameUUIDFromBytes(("OfflinePlayer:" + serverUsername).getBytes(StandardCharsets.UTF_8));
                 proxyConnection.setGameProfile(new GameProfile(uuid, serverUsername));
 
                 if (proxyConnection.getC2P().hasAttr(EaglercraftHandler.profileDataKey)) {
                     EaglercraftHandler.ProfileData profileData = proxyConnection.getC2P().attr(EaglercraftHandler.profileDataKey).get();
-                    bao.reset();
-                    d.writeByte(HandshakePacketTypes.PROTOCOL_CLIENT_PROFILE_DATA);
-                    d.writeByte(profileData.type.length());
-                    d.writeBytes(profileData.type);
-                    d.writeShort(profileData.data.length);
-                    d.write(profileData.data);
-                    ch.writeAndFlush(new BinaryWebSocketFrame(ch.alloc().buffer(bao.size()).writeBytes(bao.toByteArray())));
+                    if (profileData != null) {
+                        bao.reset();
+                        d.writeByte(HandshakePacketTypes.PROTOCOL_CLIENT_PROFILE_DATA);
+                        if (serverVers >= protocolV4) {
+                            d.writeByte(1);
+                        }
+                        String sendType = profileData.type;
+                        if (serverVers >= protocolV4 && sendType.equals("skin_v1")) {
+                            sendType = "skin_v2";
+                        } else if (serverVers < protocolV4 && sendType.equals("skin_v2")) {
+                            sendType = "skin_v1";
+                        }
+                        d.writeByte(sendType.length());
+                        d.writeBytes(sendType);
+                        d.writeShort(profileData.data.length);
+                        d.write(profileData.data);
+                        ch.writeAndFlush(new BinaryWebSocketFrame(ch.alloc().buffer(bao.size()).writeBytes(bao.toByteArray())));
+                    }
                 }
 
                 bao.reset();

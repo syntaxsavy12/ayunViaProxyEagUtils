@@ -19,7 +19,7 @@ import net.lenni0451.lambdaevents.EventHandler;
 import net.raphimc.netminecraft.constants.MCPipeline;
 import net.raphimc.netminecraft.netty.codec.PacketCodec;
 import net.raphimc.netminecraft.netty.connection.NetClient;
-import net.raphimc.netminecraft.packet.IPacket;
+import net.raphimc.netminecraft.packet.Packet;
 import net.raphimc.vialegacy.protocol.release.r1_6_4tor1_7_2_5.types.Types1_6_4;
 import net.raphimc.viaproxy.ViaProxy;
 import net.raphimc.viaproxy.plugins.ViaProxyPlugin;
@@ -167,6 +167,9 @@ public class Main extends ViaProxyPlugin {
         if (c2p.pipeline().get("ayun-eag-skin-x") != null) {
             c2p.pipeline().remove("ayun-eag-skin-x");
         }
+        if (c2p.pipeline().get("ayun-eag-pluginmsg") != null) {
+            c2p.pipeline().remove("ayun-eag-pluginmsg");
+        }
         StringBuilder url = new StringBuilder("ws");
         boolean secure = c2p.attr(secureWs).get();
         if (secure) {
@@ -204,7 +207,7 @@ public class Main extends ViaProxyPlugin {
         ch.pipeline().addAfter("eag-server-ws-handshaker", "eag-server-ws-ready", new WebSocketConnectedNotifier());
         ch.pipeline().addAfter("eag-server-ws-ready", "eag-server-handler", new EaglerServerHandler(proxyConnection, c2p.attr(eagxPass).get()));
         ch.pipeline().replace(MCPipeline.PACKET_CODEC_HANDLER_NAME, MCPipeline.PACKET_CODEC_HANDLER_NAME, new PacketCodec() {
-            protected void encode(ChannelHandlerContext ctx, IPacket in, ByteBuf out) {
+            protected void encode(ChannelHandlerContext ctx, Packet in, ByteBuf out) {
                 try {
                     super.encode(ctx, in, out);
                 } catch (IllegalStateException e) {
@@ -249,12 +252,16 @@ public class Main extends ViaProxyPlugin {
                 try {
                     if (bb.readByte() == 2 && bb.readByte() == 69) {
                         final String username = Types1_6_4.STRING.read(bb);
+                        ctx.pipeline().addBefore("eaglercraft-handler", "ayun-eag-uuid-rewriter", new EaglerUUIDRewriter());
                         ctx.pipeline().addBefore("eaglercraft-handler", "ayun-eag-voice", new EaglerVoiceHandler(username));
                         ctx.pipeline().addBefore("eaglercraft-handler", "ayun-eag-skin", new EaglerSkinHandler(username));
+                        ctx.pipeline().addBefore("eaglercraft-handler", "ayun-eag-pluginmsg", new EaglerPluginMessageHandler(true));
                     } else {
+                        ctx.pipeline().addBefore("eaglercraft-handler", "ayun-eag-uuid-rewriter", new EaglerUUIDRewriter());
                         ctx.pipeline().addBefore("eaglercraft-handler", "ayun-eag-x-login", new EaglerXLoginHandler());
                         ctx.pipeline().addBefore("eaglercraft-handler", "ayun-eag-skin-x", new EaglerXSkinHandler());
                         ctx.pipeline().addBefore("eaglercraft-handler", "ayun-eag-voice", new EaglerVoiceHandler(null));
+                        ctx.pipeline().addBefore("eaglercraft-handler", "ayun-eag-pluginmsg", new EaglerPluginMessageHandler(false));
                     }
                 } catch (Exception ignored) {
                 }
